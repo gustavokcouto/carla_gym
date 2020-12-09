@@ -14,7 +14,7 @@ class AutoPilot():
         self._speed_controller = PIDController(K_P=5.0, K_I=0.5, K_D=1.0, n=40)
 
         self._waypoint_planner = RoutePlanner(4.0, 50)
-        self._command_planner = RoutePlanner(7.5, 25.0)
+        self._command_planner = RoutePlanner(7.5, 25.0, 257)
 
         self._waypoint_planner.set_route(global_plan_gps, True)
 
