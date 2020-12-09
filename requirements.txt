@@ -1,0 +1,7 @@
+gym==0.17.2
+numpy==1.18.1
+opencv-python==4.2.0.32
+pandas==0.25.3
+Pillow==7.0.0
+pygame==2.0.0
+tqdm==4.54.1
