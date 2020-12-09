@@ -16,7 +16,7 @@ from auto_pilot import AutoPilot
 
 from route_parser import parse_routes_file
 from route_manipulation import interpolate_trajectory
-
+from common import COLOR, CONVERTER
 
 EPISODE_LENGTH = 1000
 EPISODES = 10
@@ -31,6 +31,7 @@ def collect_episode(env, save_dir):
     (save_dir / 'rgb_left').mkdir()
     (save_dir / 'rgb').mkdir()
     (save_dir / 'rgb_right').mkdir()
+    (save_dir / 'map').mkdir()
 
     env._client.start_recorder(str(save_dir / 'recording.log'))
 
@@ -42,12 +43,6 @@ def collect_episode(env, save_dir):
     elevate_transform.location.z += 0.5
 
     observations, _, _, _ = env.reset(elevate_transform)
-
-    spectator = env._world.get_spectator()
-    spectator.set_transform(
-            carla.Transform(
-                env._player.get_location() + carla.Location(z=50),
-                carla.Rotation(pitch=-90)))
 
     measurements = list()
 
@@ -65,6 +60,7 @@ def collect_episode(env, save_dir):
         rgb = observations.pop('rgb')
         rgb_left = observations.pop('rgb_left')
         rgb_right = observations.pop('rgb_right')
+        topdown = observations.pop('topdown')
 
         step_measurements = observations.update({
             'steer': control.steer,
@@ -75,11 +71,13 @@ def collect_episode(env, save_dir):
 
         if DEBUG:
             cv2.imshow('rgb', cv2.cvtColor(np.hstack((rgb_left, rgb, rgb_right)), cv2.COLOR_BGR2RGB))
+            cv2.imshow('topdown', cv2.cvtColor(COLOR[CONVERTER[topdown]], cv2.COLOR_BGR2RGB))
             cv2.waitKey(1)
 
         Image.fromarray(rgb_left).save(save_dir / 'rgb_left' / ('%04d.png' % index))
         Image.fromarray(rgb).save(save_dir / 'rgb' / ('%04d.png' % index))
         Image.fromarray(rgb_right).save(save_dir / 'rgb_right' / ('%04d.png' % index))
+        Image.fromarray(topdown).save(save_dir / 'map' / ('%04d.png' % index))
 
     pd.DataFrame(measurements).to_csv(save_dir / 'measurements.csv', index=False)
 

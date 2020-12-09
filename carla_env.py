@@ -8,6 +8,7 @@ import time
 
 import carla
 
+from PIL import Image, ImageDraw
 from route_parser import parse_routes_file
 from route_manipulation import interpolate_trajectory
 
@@ -52,6 +53,9 @@ class Camera(object):
         array = array[:, :, :3]
         array = array[:, :, ::-1]
 
+        if self.type == 'semantic_segmentation':
+            return array[:, :, 0]
+
         return array
 
     def __del__(self):
@@ -59,6 +63,50 @@ class Camera(object):
 
         with self.queue.mutex:
             self.queue.queue.clear()
+
+
+class MapCamera(Camera):
+    def __init__(self, world, player, size, fov, z, pixels_per_meter, radius):
+        super().__init__(
+                world, player,
+                size, size, fov,
+                0, 0, z, -90, 0,
+                'semantic_segmentation')
+
+        self.world = world
+        self.player = player
+        self.pixels_per_meter = pixels_per_meter
+        self.size = size
+        self.radius = radius
+
+    def get(self):
+        image = Image.fromarray(super().get())
+        draw = ImageDraw.Draw(image)
+
+        transform = self.player.get_transform()
+        pos = transform.location
+        theta = np.radians(90 + transform.rotation.yaw)
+        R = np.array([
+            [np.cos(theta), -np.sin(theta)],
+            [np.sin(theta),  np.cos(theta)],
+            ])
+
+        for light in self.world.get_actors().filter('*traffic_light*'):
+            delta = light.get_transform().location - pos
+
+            target = R.T.dot([delta.x, delta.y])
+            target *= self.pixels_per_meter
+            target += self.size // 2
+
+            if min(target) < 0 or max(target) >= self.size:
+                continue
+
+            x, y = target
+            draw.ellipse(
+                    (x-self.radius, y-self.radius, x+self.radius, y+self.radius),
+                    13 + light.state.real)
+
+        return np.array(image)
 
 
 class GNSS(object):
@@ -187,6 +235,8 @@ class CarlaEnv(gym.Env):
         self._cameras['rgb'] = Camera(self._world, self._player, 256, 144, 90, 1.2, 0.0, 1.3, 0.0, 0.0)
         self._cameras['rgb_left'] = Camera(self._world, self._player, 256, 144, 90, 1.2, -0.25, 1.3, 0.0, -45.0)
         self._cameras['rgb_right'] = Camera(self._world, self._player, 256, 144, 90, 1.2, 0.25, 1.3, 0.0, 45.0)
+        self._cameras['topdown'] = MapCamera(self._world, self._player, 512, 5 * 10.0, 100.0, 5.5, 5)
+
         self._gnss = GNSS(self._world, self._player)
         self._imu = IMU(self._world, self._player)
 
@@ -214,11 +264,19 @@ class CarlaEnv(gym.Env):
         
         return self.step()
 
+    def tick_scenario(self):
+        spectator = self._world.get_spectator()
+        spectator.set_transform(
+            carla.Transform(
+                self._player.get_location() + carla.Location(z=50),
+                carla.Rotation(pitch=-90)))
+
     def step(self, control=None):
         if control is not None:
             self._player.apply_control(control)
 
         self._world.tick()
+        self.tick_scenario()
         self._tick += 1
 
         transform = self._player.get_transform()
