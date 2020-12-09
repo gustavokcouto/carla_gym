@@ -1,4 +1,5 @@
 import sys
+import json
 
 from pathlib import Path
 
@@ -11,6 +12,10 @@ import pandas as pd
 from PIL import Image
 
 from carla_env import CarlaEnv
+from auto_pilot import AutoPilot
+
+from route_parser import parse_routes_file
+from route_manipulation import interpolate_trajectory
 
 
 EPISODE_LENGTH = 1000
@@ -29,6 +34,15 @@ def collect_episode(env, save_dir):
 
     env._client.start_recorder(str(save_dir / 'recording.log'))
 
+    route_file = Path('data/route_00.xml')
+    trajectory = parse_routes_file(route_file)
+    global_plan_gps, global_plan_world_coord = interpolate_trajectory(env._world, trajectory)
+
+    elevate_transform = global_plan_world_coord[0][0]
+    elevate_transform.location.z += 0.5
+
+    observations, _, _, _ = env.reset(elevate_transform)
+
     spectator = env._world.get_spectator()
     spectator.set_transform(
             carla.Transform(
@@ -37,9 +51,13 @@ def collect_episode(env, save_dir):
 
     measurements = list()
 
-    for step in tqdm.tqdm(range(EPISODE_LENGTH * FRAME_SKIP)):
-        observations, _, _, _ = env.step()
+    auto_pilot = AutoPilot(global_plan_gps, global_plan_world_coord)
 
+    for step in tqdm.tqdm(range(EPISODE_LENGTH * FRAME_SKIP)):
+        control = auto_pilot.run_step(observations)
+        
+        observations, _, _, _ = env.step(control)
+        
         if step % FRAME_SKIP != 0:
             continue
 
@@ -48,7 +66,12 @@ def collect_episode(env, save_dir):
         rgb_left = observations.pop('rgb_left')
         rgb_right = observations.pop('rgb_right')
 
-        measurements.append(observations)
+        step_measurements = observations.update({
+            'steer': control.steer,
+            'throttle': control.throttle,
+            'brake': control.brake
+        })
+        measurements.append(step_measurements)
 
         if DEBUG:
             cv2.imshow('rgb', cv2.cvtColor(np.hstack((rgb_left, rgb, rgb_right)), cv2.COLOR_BGR2RGB))
@@ -68,10 +91,8 @@ def main():
 
     env = CarlaEnv()
     for _ in range(EPISODES):
-        env.reset()
-        env._player.set_autopilot(True)
-
         SAVE_PATH.mkdir(exist_ok=True)
+
         collect_episode(env, SAVE_PATH / ('%03d' % len(list(SAVE_PATH.glob('*')))))
 
 

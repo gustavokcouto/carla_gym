@@ -8,6 +8,9 @@ import time
 
 import carla
 
+from route_parser import parse_routes_file
+from route_manipulation import interpolate_trajectory
+
 
 VEHICLE_NAME = 'vehicle.lincoln.mkz2017'
 
@@ -58,6 +61,90 @@ class Camera(object):
             self.queue.queue.clear()
 
 
+class GNSS(object):
+    def __init__(self, world, player):
+        bp = world.get_blueprint_library().find('sensor.other.gnss')
+
+        gnss_location = carla.Location(0,0,0)
+        gnss_rotation = carla.Rotation(0,0,0)
+        gnss_transform = carla.Transform(gnss_location,gnss_rotation)
+
+        self.type = type
+        self.queue = queue.Queue()
+
+        self.gnss = world.spawn_actor(bp, gnss_transform, attach_to=player, attachment_type=carla.AttachmentType.Rigid)
+        self.gnss.listen(self.queue.put)
+        self.gnss_data = np.array([0, 0])
+        self.initialized = False
+
+    def get(self):
+        if not self.initialized:
+            raw_data = self.queue.get()
+            self.gnss_data = np.array([raw_data.latitude, raw_data.longitude])
+            self.initialized = True
+
+        while self.queue.qsize() > 0:
+            raw_data = self.queue.get()
+            self.gnss_data = np.array([raw_data.latitude, raw_data.longitude])
+
+        return self.gnss_data
+
+    def __del__(self):
+        self.gnss.destroy()
+
+        with self.queue.mutex:
+            self.queue.queue.clear()
+
+
+class IMU(object):
+    def __init__(self, world, player):
+        imu_bp = world.get_blueprint_library().find('sensor.other.imu')
+
+        imu_location = carla.Location(0,0,0)
+        imu_rotation = carla.Rotation(0,0,0)
+        imu_transform = carla.Transform(imu_location, imu_rotation)
+
+        self.type = type
+        self.queue = queue.Queue()
+
+        self.imu = world.spawn_actor(imu_bp, imu_transform, attach_to=player, attachment_type=carla.AttachmentType.Rigid)
+        self.imu.listen(self.queue.put)
+        self.imu_data = np.array([0, 0])
+        self.initialized = False
+
+    def get(self):
+        if not self.initialized:
+            raw_data = self.queue.get()
+            self.imu_data = np.array([raw_data.accelerometer.x,
+                          raw_data.accelerometer.y,
+                          raw_data.accelerometer.z,
+                          raw_data.gyroscope.x,
+                          raw_data.gyroscope.y,
+                          raw_data.gyroscope.z,
+                          raw_data.compass,
+                         ], dtype=np.float64)
+            self.initialized = True
+
+        while self.queue.qsize() > 0:
+            raw_data = self.queue.get()
+            self.imu_data = np.array([raw_data.accelerometer.x,
+                          raw_data.accelerometer.y,
+                          raw_data.accelerometer.z,
+                          raw_data.gyroscope.x,
+                          raw_data.gyroscope.y,
+                          raw_data.gyroscope.z,
+                          raw_data.compass,
+                         ], dtype=np.float64)
+
+        return self.imu_data
+
+    def __del__(self):
+        self.imu.destroy()
+
+        with self.queue.mutex:
+            self.queue.queue.clear()
+
+
 class CarlaEnv(gym.Env):
     def __init__(self, town='Town01', port=2000):
         super(CarlaEnv, self).__init__()
@@ -100,8 +187,10 @@ class CarlaEnv(gym.Env):
         self._cameras['rgb'] = Camera(self._world, self._player, 256, 144, 90, 1.2, 0.0, 1.3, 0.0, 0.0)
         self._cameras['rgb_left'] = Camera(self._world, self._player, 256, 144, 90, 1.2, -0.25, 1.3, 0.0, -45.0)
         self._cameras['rgb_right'] = Camera(self._world, self._player, 256, 144, 90, 1.2, 0.25, 1.3, 0.0, 45.0)
+        self._gnss = GNSS(self._world, self._player)
+        self._imu = IMU(self._world, self._player)
 
-    def reset(self):
+    def reset(self, start_pose):
         set_sync_mode(self._client, True)
 
         self._time_start = time.time()
@@ -110,7 +199,7 @@ class CarlaEnv(gym.Env):
             self._client.apply_batch([carla.command.DestroyActor(x) for x in self._actor_dict[actor_type]])
             self._actor_dict[actor_type].clear()
         
-        self._spawn_player(np.random.choice(self._map.get_spawn_points()))
+        self._spawn_player(start_pose)
         self._setup_sensors()
 
         ticks = 10
@@ -122,6 +211,8 @@ class CarlaEnv(gym.Env):
 
         self._time_start = time.time()
         self._tick = 0
+        
+        return self.step()
 
     def step(self, control=None):
         if control is not None:
@@ -135,11 +226,16 @@ class CarlaEnv(gym.Env):
 
         # Put here for speed (get() busy polls queue).
         obs = {key: val.get() for key, val in self._cameras.items()}
+        gps = self._gnss.get()
+        compass = self._imu.get()[-1]
+        
         obs.update({
             'wall': time.time() - self._time_start,
             'tick': self._tick,
             'x': transform.location.x,
             'y': transform.location.y,
+            'gps': gps,
+            'compass': compass,
             'theta': transform.rotation.yaw,
             'speed': np.linalg.norm([velocity.x, velocity.y, velocity.z]),
             })
