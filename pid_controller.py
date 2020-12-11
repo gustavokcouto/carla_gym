@@ -3,11 +3,8 @@ from collections import deque
 import numpy as np
 
 
-DEBUG = True
-
-
 class PIDController(object):
-    def __init__(self, K_P=1.0, K_I=0.0, K_D=0.0, n=20):
+    def __init__(self, K_P=1.0, K_I=0.0, K_D=0.0, n=20, debug=True):
         self._K_P = K_P
         self._K_I = K_I
         self._K_D = K_D
@@ -15,6 +12,7 @@ class PIDController(object):
         self._window = deque([0 for _ in range(n)], maxlen=n)
         self._max = 0.0
         self._min = 0.0
+        self.debug = debug
 
     def step(self, error):
         self._window.append(error)
@@ -28,7 +26,7 @@ class PIDController(object):
             integral = 0.0
             derivative = 0.0
 
-        if DEBUG:
+        if self.debug:
             import cv2
 
             canvas = np.ones((100, 100, 3), dtype=np.uint8)
